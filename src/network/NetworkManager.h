@@ -11,7 +11,7 @@ void sendClientHello();
 void sendEspDone();
 void sendKeypressEvent(char key);   // ← NEW: called by LedController on each keypress
 void makeHttpRequest();
-cppvoid sendGyroData(float ax, float ay, float az,
+void sendGyroData(float ax, float ay, float az,
                   float gx, float gy, float gz,
                   bool tiltForward, bool tiltBackward,
                   bool tiltLeft,    bool tiltRight);

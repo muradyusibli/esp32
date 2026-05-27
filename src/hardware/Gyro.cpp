@@ -2,7 +2,6 @@
 #include "Pins.h"
 #include <Wire.h>
 #include <Arduino.h>
-#include <math.h>
 #include "network/NetworkManager.h"
 
 static Gyro gyro;
@@ -10,9 +9,9 @@ static Gyro gyro;
 static constexpr float ACC_SENSITIVITY  = 16384.0f;
 static constexpr float GYRO_SENSITIVITY =   131.0f;
 static constexpr float G_TO_MS2         =     9.81f;
-static constexpr float RAD_TO_DEG       =    57.2958f;
 static constexpr int   AVG_WINDOW       =    20;
-static constexpr float TILT_THRESHOLD   =     5.0f;  // degrees
+// g*sin(5°) ≈ 0.854 m/s² — threshold on debiased axes (gravity already removed)
+static constexpr float TILT_THRESHOLD   =     0.854f;  // m/s²
 
 // ── Bias (calibration) ──────────────────────────────────────────────
 static float bias_ax = 0, bias_ay = 0, bias_az = 0;
@@ -142,17 +141,14 @@ void updateGyro() {
     float sax, say, saz, sgx, sgy, sgz;
     calcAvg(sax, say, saz, sgx, sgy, sgz);
 
-    // ── Tilt angles from smoothed accelerometer ──────────────────────
-    // pitch: rotation around Y axis (forward / backward)
-    // roll:  rotation around X axis (left / right)
-    float pitch = atan2f(sax, sqrtf(say*say + saz*saz)) * RAD_TO_DEG;
-    float roll  = atan2f(say, sqrtf(sax*sax + saz*saz)) * RAD_TO_DEG;
-
-    // ── Tilt booleans ────────────────────────────────────────────────
-    bool tiltForward  = pitch >  TILT_THRESHOLD;
-    bool tiltBackward = pitch < -TILT_THRESHOLD;
-    bool tiltLeft     = roll  >  TILT_THRESHOLD;
-    bool tiltRight    = roll  < -TILT_THRESHOLD;
+    // ── Tilt booleans — threshold debiased axes directly ────────────
+    // Calibration removes gravity from az, so atan2-based pitch/roll is
+    // invalid (denominator ≈ 0). Threshold sax/say directly instead:
+    // sax > g*sin(5°) is equivalent to ">5° forward tilt" when device is flat.
+    bool tiltForward  = sax >  TILT_THRESHOLD;
+    bool tiltBackward = sax < -TILT_THRESHOLD;
+    bool tiltLeft     = say >  TILT_THRESHOLD;
+    bool tiltRight    = say < -TILT_THRESHOLD;
 
     // Send immediately on any state change
     bool stateChanged = (tiltForward  != prev_tiltForward)  ||
@@ -165,15 +161,14 @@ void updateGyro() {
         prev_tiltBackward = tiltBackward;
         prev_tiltLeft     = tiltLeft;
         prev_tiltRight    = tiltRight;
-        Serial.printf("[Gyro] Tilt  fwd:%d bwd:%d left:%d right:%d  pitch:%.1f°  roll:%.1f°\n",
-                      tiltForward, tiltBackward, tiltLeft, tiltRight, pitch, roll);
+        Serial.printf("[Gyro] Tilt  fwd:%d bwd:%d left:%d right:%d  ax:%.3f  ay:%.3f\n",
+                      tiltForward, tiltBackward, tiltLeft, tiltRight, sax, say);
     }
 
     if (now - lastGyroPrintAt >= 1000) {
         lastGyroPrintAt = now;
         Serial.printf("[Gyro] Acc  X:%7.3f  Y:%7.3f  Z:%7.3f m/s²\n", sax, say, saz);
         Serial.printf("[Gyro] Gyro X:%7.2f  Y:%7.2f  Z:%7.2f °/s\n",  sgx, sgy, sgz);
-        Serial.printf("[Gyro] Angles  pitch:%.1f°  roll:%.1f°\n", pitch, roll);
     }
 
     sendGyroData(sax, say, saz, sgx, sgy, sgz,

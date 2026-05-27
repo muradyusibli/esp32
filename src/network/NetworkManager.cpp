@@ -122,7 +122,6 @@ void sendKeypressEvent(char key) {
     Serial.printf("[WS] game:keypress → key='%c'\n", key);
 }
 
-// NetworkManager.cpp — update definition (remove mag parameter and payload line)
 void sendGyroData(float ax, float ay, float az,
                   float gx, float gy, float gz,
                   bool tiltForward, bool tiltBackward,
@@ -202,15 +201,14 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
         socketReadyForEvents = false;
         Serial.printf("[WS] Disconnected. payload='%s' length=%u\n",
                       text.c_str(), (unsigned)length);
-        break;
-            if (millis() - lastSocketDisconnectMessageAt >=
-                SOCKET_DISCONNECT_MESSAGE_INTERVAL_MS) {
-                lastSocketDisconnectMessageAt = millis();
+        if (millis() - lastSocketDisconnectMessageAt >=
+            SOCKET_DISCONNECT_MESSAGE_INTERVAL_MS) {
+            lastSocketDisconnectMessageAt = millis();
 #if SHOW_SOCKET_OFFLINE_ON_OLED
-                displayMessage("WS offline\nLEDs still work");
+            displayMessage("WS offline\nLEDs still work");
 #endif
-            }
-            break;
+        }
+        break;
 
     case WStype_CONNECTED:
         socketConnected      = true;
