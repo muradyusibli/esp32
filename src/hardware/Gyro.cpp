@@ -164,8 +164,7 @@ void updateGyro() {
                       tiltForward, tiltBackward, tiltLeft, tiltRight, sax, say);
         Serial.printf("[Gyro] Acc  X:%7.3f  Y:%7.3f  Z:%7.3f m/s²\n", sax, say, saz);
         Serial.printf("[Gyro] Gyro X:%7.2f  Y:%7.2f  Z:%7.2f °/s\n",  sgx, sgy, sgz);
+        sendGyroData(sax, say, saz, sgx, sgy, sgz,
+                     tiltForward, tiltBackward, tiltLeft, tiltRight);
     }
-
-    sendGyroData(sax, say, saz, sgx, sgy, sgz,
-                 tiltForward, tiltBackward, tiltLeft, tiltRight);
 }
