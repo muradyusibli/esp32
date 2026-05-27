@@ -93,7 +93,7 @@ void sendEspDone() {
 // `key`      — the raw character from keypadScan() ('0'-'9', '*', '#', 'A'-'D')
 // `numpadKey`— integer 0-9 for digit keys, -1 for non-digit keys
 
-void sendKeypressEvent(char key) {
+void sendKeypressEvent(char key, const char* type) {
     if (!(socketStarted && socketConnected && socketReadyForEvents &&
           WiFi.status() == WL_CONNECTED)) return;
 
@@ -109,7 +109,8 @@ void sendKeypressEvent(char key) {
     data["roomId"]          = roomId;
 
     JsonObject payload = data.createNestedObject("payload");
-    payload["key"]      = keyStr;
+    payload["key"]  = keyStr;
+    payload["type"] = type;
 
     // Provide a convenient integer for digit keys (matches the useNumpad hook)
     if (key >= '0' && key <= '9') {
@@ -119,7 +120,7 @@ void sendKeypressEvent(char key) {
     }
 
     sendEvent("game:keypress", data);
-    Serial.printf("[WS] game:keypress → key='%c'\n", key);
+    Serial.printf("[WS] game:keypress → key='%c' type=%s\n", key, type);
 }
 
 void sendGyroData(float ax, float ay, float az,

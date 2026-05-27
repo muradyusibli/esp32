@@ -202,9 +202,11 @@ void ledButtonTask(void* parameter) {
         // per press, not once per scan tick (~5 ms).
         static char previousKey = 0;
         if (key != 0 && key != previousKey) {
-            // Any key on the matrix — digits, A-D, *, # — is forwarded.
-            // The frontend useNumpad hook filters to the keys it cares about.
-            sendKeypressEvent(key);
+            sendKeypressEvent(key, "keydown");
+        }
+        // Send keyup when a digit key is released (A-D don't need keyup)
+        if (key == 0 && previousKey >= '0' && previousKey <= '9') {
+            sendKeypressEvent(previousKey, "keyup");
         }
         previousKey = key;
         // ──────────────────────────────────────────────────────────────────

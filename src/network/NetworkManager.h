@@ -9,7 +9,7 @@ void updateWiFiAndSocket();
 void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);  // ← was socketIOEvent(...)
 void sendClientHello();
 void sendEspDone();
-void sendKeypressEvent(char key);   // ← NEW: called by LedController on each keypress
+void sendKeypressEvent(char key, const char* type = "keydown");
 void makeHttpRequest();
 void sendGyroData(float ax, float ay, float az,
                   float gx, float gy, float gz,
