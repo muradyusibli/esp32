@@ -266,6 +266,10 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
                     scheduleBackendSequence(sequence, delayMs, sequenceId);
                 }
 
+            } else if (eventName == "client:helloAck") {
+                socketReadyForEvents = true;
+                Serial.println("[WS] client:helloAck received — ready to send events");
+
             } else if (eventName == "game:inputReady") {
                 Serial.println("[WS] game:inputReady received");
 
