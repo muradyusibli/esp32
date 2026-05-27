@@ -10,8 +10,9 @@ static constexpr float ACC_SENSITIVITY  = 16384.0f;
 static constexpr float GYRO_SENSITIVITY =   131.0f;
 static constexpr float G_TO_MS2         =     9.81f;
 static constexpr int   AVG_WINDOW       =    20;
-// g*sin(5°) ≈ 0.854 m/s² — threshold on debiased axes (gravity already removed)
-static constexpr float TILT_THRESHOLD   =     0.854f;  // m/s²
+// g*sin(5°) ≈ 0.854 m/s², g*sin(10°) ≈ 1.703 m/s² — thresholds on debiased axes
+static constexpr float TILT_THRESHOLD_FB  =  0.854f;  // forward/backward (5°)
+static constexpr float TILT_THRESHOLD_LR  =  1.703f;  // left/right (10°) — less sensitive
 
 // ── Bias (calibration) ──────────────────────────────────────────────
 static float bias_ax = 0, bias_ay = 0, bias_az = 0;
@@ -113,8 +114,7 @@ void initGyro() {
 }
 
 // ── Update loop (50 Hz) ───────────────────────────────────────────────
-static unsigned long lastGyroSendAt  = 0;
-static unsigned long lastGyroPrintAt = 0;
+static unsigned long lastGyroSendAt = 0;
 
 void updateGyro() {
     unsigned long now = millis();
@@ -145,12 +145,11 @@ void updateGyro() {
     // Calibration removes gravity from az, so atan2-based pitch/roll is
     // invalid (denominator ≈ 0). Threshold sax/say directly instead:
     // sax > g*sin(5°) is equivalent to ">5° forward tilt" when device is flat.
-    bool tiltForward  = sax >  TILT_THRESHOLD;
-    bool tiltBackward = sax < -TILT_THRESHOLD;
-    bool tiltLeft     = say >  TILT_THRESHOLD;
-    bool tiltRight    = say < -TILT_THRESHOLD;
+    bool tiltForward  = sax >  TILT_THRESHOLD_FB;
+    bool tiltBackward = sax < -TILT_THRESHOLD_FB;
+    bool tiltLeft     = say >  TILT_THRESHOLD_LR;
+    bool tiltRight    = say < -TILT_THRESHOLD_LR;
 
-    // Send immediately on any state change
     bool stateChanged = (tiltForward  != prev_tiltForward)  ||
                         (tiltBackward != prev_tiltBackward) ||
                         (tiltLeft     != prev_tiltLeft)     ||
@@ -163,10 +162,6 @@ void updateGyro() {
         prev_tiltRight    = tiltRight;
         Serial.printf("[Gyro] Tilt  fwd:%d bwd:%d left:%d right:%d  ax:%.3f  ay:%.3f\n",
                       tiltForward, tiltBackward, tiltLeft, tiltRight, sax, say);
-    }
-
-    if (now - lastGyroPrintAt >= 1000) {
-        lastGyroPrintAt = now;
         Serial.printf("[Gyro] Acc  X:%7.3f  Y:%7.3f  Z:%7.3f m/s²\n", sax, say, saz);
         Serial.printf("[Gyro] Gyro X:%7.2f  Y:%7.2f  Z:%7.2f °/s\n",  sgx, sgy, sgz);
     }
