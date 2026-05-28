@@ -104,6 +104,10 @@ void enterLightSleepUntilButtonPress() {
     Serial.println("[Power] Gyro wake source armed on GPIO " TOSTRING(MPU_INT_PIN));
 #endif
 
+    // RF receiver: wake immediately when a signal pulse arrives so RCSwitch's ISR
+    // can capture the transitions.  GPIO 35 idles LOW; a received signal goes HIGH.
+    gpio_wakeup_enable((gpio_num_t)RF_RECEIVER_PIN, GPIO_INTR_HIGH_LEVEL);
+
     // Both sources registered once, outside the loop.
     esp_sleep_enable_gpio_wakeup();
     esp_sleep_enable_timer_wakeup(500000ULL);  // 500 ms — RF + gyro poll interval
@@ -118,6 +122,10 @@ void enterLightSleepUntilButtonPress() {
 
         // ── Timer wake: poll RF and gyro, then go back to sleep ────────────
         if (cause == ESP_SLEEP_WAKEUP_TIMER) {
+
+            // Wire is not automatically restored after light sleep; re-init it
+            // here so the I²C calls below (gyro, etc.) actually work.
+            Wire.begin(OLED_SDA, OLED_SCL);
 
 #if RF_WAKES_FROM_SLEEP
             if (updateRfReceiver()) {
@@ -145,11 +153,10 @@ void enterLightSleepUntilButtonPress() {
             continue;  // no wake condition — go back to sleep
         }
 
-        // ── GPIO wake: keypad or (optionally) hardware gyro INT ────────────
+        // ── GPIO wake: keypad, RF signal, or (optionally) hardware gyro INT ──
         if (cause == ESP_SLEEP_WAKEUP_GPIO) {
 
-#ifdef MPU_INT_PIN
-            // Determine whether it was the keypad or the gyro INT pin.
+            // Check keypad first — any column pulled LOW means a key is pressed.
             bool keypadPressed = false;
             for (int i = 0; i < numberOfWakeButtons; i++) {
                 if (digitalRead(wakeButtonPins[i]) == LOW) {
@@ -158,28 +165,44 @@ void enterLightSleepUntilButtonPress() {
                 }
             }
 
-            if (!keypadPressed) {
+            if (keypadPressed) {
+                Serial.println("[Power] GPIO wake — keypad pressed");
+                Serial.flush();
+                wakeConfirmed = true;
+                break;
+            }
+
+#ifdef MPU_INT_PIN
+            // Hardware gyro INT wire path.
 #if GYRO_WAKES_FROM_SLEEP
-                // Gyro INT wire path: motion wakes the device fully.
                 Serial.println("[Power] Gyro motion wake (INT pin) — waking");
                 Serial.flush();
                 clearGyroMotionInterrupt();
                 wakeConfirmed = true;
                 break;
 #else
-                // Gyro INT wired but wake disabled: clear interrupt and sleep on.
                 Serial.println("[Power] Gyro INT fired but GYRO_WAKES_FROM_SLEEP=0 — continuing");
                 Serial.flush();
                 clearGyroMotionInterrupt();
                 continue;
 #endif
-            }
 #endif  // MPU_INT_PIN
 
-            Serial.println("[Power] GPIO wake — keypad pressed");
-            Serial.flush();
-            wakeConfirmed = true;
-            break;
+            // Not keypad (and no INT wire) — likely the RF pin went HIGH.
+            // RCSwitch's ISR ran while the CPU was awake during the signal;
+            // check whether a valid code was decoded.
+#if RF_WAKES_FROM_SLEEP
+            if (updateRfReceiver()) {
+                Serial.println("[Power] RF signal via GPIO wake — waking");
+                Serial.flush();
+                wakeConfirmed = true;
+                break;
+            }
+#else
+            updateRfReceiver();
+#endif
+
+            continue;  // spurious / noise wake — go back to sleep
         }
 
         // ── Unexpected cause: bail out rather than hang ────────────────────
@@ -193,6 +216,7 @@ void enterLightSleepUntilButtonPress() {
     for (int i = 0; i < numberOfWakeButtons; i++) {
         gpio_wakeup_disable((gpio_num_t)wakeButtonPins[i]);
     }
+    gpio_wakeup_disable((gpio_num_t)RF_RECEIVER_PIN);
 #ifdef MPU_INT_PIN
     gpio_wakeup_disable((gpio_num_t)MPU_INT_PIN);
 #endif
