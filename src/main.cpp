@@ -16,7 +16,8 @@ void setup() {
 
     initControllerPins();
     initDisplay();          // Wire.begin() lives here — runs first
-    initGyro();             // ← add after initDisplay, shares the same Wire bus
+    initGyro();
+    initGyroMotionWake();// ← add after initDisplay, shares the same Wire bus
     initRfReceiver();
     initKeypad();
 

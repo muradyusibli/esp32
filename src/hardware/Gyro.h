@@ -14,3 +14,6 @@ public:
 
 void initGyro();
 void updateGyro();
+bool isGyroActive();
+void initGyroMotionWake();
+void clearGyroMotionInterrupt();

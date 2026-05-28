@@ -3,6 +3,7 @@
 #include <Wire.h>
 #include <Arduino.h>
 #include "network/NetworkManager.h"
+#include "app/Settings.h"
 
 static Gyro gyro;
 
@@ -48,6 +49,8 @@ static bool prev_tiltForward  = false;
 static bool prev_tiltBackward = false;
 static bool prev_tiltLeft     = false;
 static bool prev_tiltRight    = false;
+
+static volatile bool gyroActivityFlag = false;
 
 // ── Gyro class ───────────────────────────────────────────────────────
 bool Gyro::begin() {
@@ -113,6 +116,59 @@ void initGyro() {
     }
 }
 
+// ── MPU-6050 register helpers ─────────────────────────────────────────
+static void mpuWriteReg(uint8_t reg, uint8_t value) {
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(reg);
+    Wire.write(value);
+    Wire.endTransmission(true);
+}
+
+static uint8_t mpuReadReg(uint8_t reg) {
+    Wire.beginTransmission(MPU_ADDR);
+    Wire.write(reg);
+    Wire.endTransmission(false);
+    Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)1, (uint8_t)1);
+    return Wire.available() ? Wire.read() : 0;
+}
+
+// ── Motion-wake interrupt setup ───────────────────────────────────────
+// Configures the MPU-6050 hardware motion-detection interrupt so its INT
+// pin asserts HIGH when motion exceeds the threshold.  The ESP32 can then
+// use that GPIO as a wake source from light sleep.
+//
+// Call this once in setup(), AFTER initGyro().
+// Hardware requirement: MPU-6050 INT pin wired to ESP32 GPIO 27.
+//
+// Register map used:
+//   0x37  INT_PIN_CFG  — 0x20 = latch mode (INT stays HIGH until 0x3A read)
+//   0x1F  MOT_THR      — threshold in 2 mg steps  (0x14 = ~40 mg)
+//   0x20  MOT_DUR      — minimum duration in ms    (0x01 = 1 ms)
+//   0x38  INT_ENABLE   — bit 6 (MOT_EN) enables motion interrupt
+//   0x3A  INT_STATUS   — reading this register clears the latched interrupt
+void initGyroMotionWake() {
+    // Use latch mode (0x20) so INT pin holds HIGH until INT_STATUS is read.
+    // This is more reliable for GPIO wake than the 50µs pulse (0x10) because
+    // the ESP32 might miss a short pulse while transitioning out of sleep.
+    mpuWriteReg(0x37, 0x20);  // INT_PIN_CFG: active-high, latch until cleared
+    mpuWriteReg(0x1F, 0x14);  // MOT_THR: ~40 mg — high enough to ignore vibration/noise
+    mpuWriteReg(0x20, 0x01);  // MOT_DUR: 1 ms minimum motion duration
+    mpuWriteReg(0x38, 0x40);  // INT_ENABLE: set MOT_EN (bit 6)
+
+    // Clear any interrupt that fired during/after calibration so the INT pin
+    // starts LOW and does not immediately prevent sleep entry.
+    mpuReadReg(0x3A);         // reading INT_STATUS clears the latch
+    delay(5);
+
+    Serial.println("[Gyro] Motion-wake interrupt configured on GPIO 27");
+}
+
+// Call this after every wake from sleep (in PowerManager, after Wire.begin)
+// to clear any latched motion interrupt before re-entering sleep.
+void clearGyroMotionInterrupt() {
+    mpuReadReg(0x3A);  // clears latched INT_STATUS on MPU-6050
+}
+
 // ── Update loop (50 Hz) ───────────────────────────────────────────────
 static unsigned long lastGyroSendAt = 0;
 
@@ -141,6 +197,12 @@ void updateGyro() {
     float sax, say, saz, sgx, sgy, sgz;
     calcAvg(sax, say, saz, sgx, sgy, sgz);
 
+    // Activity detection for power manager
+    float mag = sqrtf(sax*sax + say*say + saz*saz);
+    if (mag > GYRO_ACTIVITY_THRESHOLD_MS2) {
+        gyroActivityFlag = true;
+    }
+
     // ── Tilt booleans — threshold debiased axes directly ────────────
     // Calibration removes gravity from az, so atan2-based pitch/roll is
     // invalid (denominator ≈ 0). Threshold sax/say directly instead:
@@ -167,4 +229,12 @@ void updateGyro() {
         sendGyroData(sax, say, saz, sgx, sgy, sgz,
                      tiltForward, tiltBackward, tiltLeft, tiltRight);
     }
+}
+
+bool isGyroActive() {
+    if (gyroActivityFlag) {
+        gyroActivityFlag = false;
+        return true;
+    }
+    return false;
 }

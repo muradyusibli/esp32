@@ -45,3 +45,4 @@
 
 #define KEYPAD_ROWS 4
 #define KEYPAD_COLS 4
+#define GYRO_ACTIVITY_THRESHOLD_MS2     0.05f

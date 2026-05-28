@@ -7,7 +7,7 @@ const int keypadRowPins[] = { 18, 19, 32, 33 };
 const int keypadColPins[] = { 4, 13, 14, 15 };
 
 
-const int wakeButtonPins[]    = { 18, 19, 32, 33, RANDOM_BUTTON_PIN, SOCKET_BUTTON_PIN };
+const int wakeButtonPins[] = { 13, 4, 14, 15 };
 const int numberOfWakeButtons = sizeof(wakeButtonPins) / sizeof(wakeButtonPins[0]);
 
 const int randomBlinkCount = 4;
