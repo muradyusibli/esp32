@@ -12,8 +12,9 @@ public:
     bool read(GyroData& out);
 };
 
-void initGyro();
-void updateGyro();
-bool isGyroActive();
-void initGyroMotionWake();
-void clearGyroMotionInterrupt();
+void     initGyro();
+void     updateGyro();
+bool     isGyroActive();
+void     initGyroMotionWake();
+void     clearGyroMotionInterrupt();
+uint8_t  readGyroIntStatus();

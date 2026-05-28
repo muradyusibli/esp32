@@ -11,9 +11,9 @@ static constexpr float ACC_SENSITIVITY  = 16384.0f;
 static constexpr float GYRO_SENSITIVITY =   131.0f;
 static constexpr float G_TO_MS2         =     9.81f;
 static constexpr int   AVG_WINDOW       =    20;
-// g*sin(5°) ≈ 0.854 m/s², g*sin(10°) ≈ 1.703 m/s² — thresholds on debiased axes
+
 static constexpr float TILT_THRESHOLD_FB  =  0.854f;  // forward/backward (5°)
-static constexpr float TILT_THRESHOLD_LR  =  1.703f;  // left/right (10°) — less sensitive
+static constexpr float TILT_THRESHOLD_LR  =  1.703f;  // left/right (10°)
 
 // ── Bias (calibration) ──────────────────────────────────────────────
 static float bias_ax = 0, bias_ay = 0, bias_az = 0;
@@ -22,8 +22,8 @@ static float bias_gx = 0, bias_gy = 0, bias_gz = 0;
 // ── Running-average buffers ──────────────────────────────────────────
 static float buf_ax[AVG_WINDOW] = {}, buf_ay[AVG_WINDOW] = {}, buf_az[AVG_WINDOW] = {};
 static float buf_gx[AVG_WINDOW] = {}, buf_gy[AVG_WINDOW] = {}, buf_gz[AVG_WINDOW] = {};
-static int   avg_idx    = 0;
-static int   avg_count  = 0;  // ramps up to AVG_WINDOW on first fill
+static int   avg_idx   = 0;
+static int   avg_count = 0;
 
 static void pushAvg(float ax, float ay, float az,
                     float gx, float gy, float gz) {
@@ -44,7 +44,6 @@ static void calcAvg(float& ax, float& ay, float& az,
     gx = sgx/avg_count; gy = sgy/avg_count; gz = sgz/avg_count;
 }
 
-// ── Tilt state (only fires sendGyroData when state changes) ─────────
 static bool prev_tiltForward  = false;
 static bool prev_tiltBackward = false;
 static bool prev_tiltLeft     = false;
@@ -133,40 +132,27 @@ static uint8_t mpuReadReg(uint8_t reg) {
 }
 
 // ── Motion-wake interrupt setup ───────────────────────────────────────
-// Configures the MPU-6050 hardware motion-detection interrupt so its INT
-// pin asserts HIGH when motion exceeds the threshold.  The ESP32 can then
-// use that GPIO as a wake source from light sleep.
-//
-// Call this once in setup(), AFTER initGyro().
-// Hardware requirement: MPU-6050 INT pin wired to ESP32 GPIO 27.
-//
-// Register map used:
-//   0x37  INT_PIN_CFG  — 0x20 = latch mode (INT stays HIGH until 0x3A read)
-//   0x1F  MOT_THR      — threshold in 2 mg steps  (0x14 = ~40 mg)
-//   0x20  MOT_DUR      — minimum duration in ms    (0x01 = 1 ms)
-//   0x38  INT_ENABLE   — bit 6 (MOT_EN) enables motion interrupt
-//   0x3A  INT_STATUS   — reading this register clears the latched interrupt
+// Safe to call both at boot and after light-sleep wake (re-arms the MPU registers).
 void initGyroMotionWake() {
-    // Use latch mode (0x20) so INT pin holds HIGH until INT_STATUS is read.
-    // This is more reliable for GPIO wake than the 50µs pulse (0x10) because
-    // the ESP32 might miss a short pulse while transitioning out of sleep.
-    mpuWriteReg(0x37, 0x20);  // INT_PIN_CFG: active-high, latch until cleared
-    mpuWriteReg(0x1F, 0x14);  // MOT_THR: ~40 mg — high enough to ignore vibration/noise
-    mpuWriteReg(0x20, 0x01);  // MOT_DUR: 1 ms minimum motion duration
-    mpuWriteReg(0x38, 0x40);  // INT_ENABLE: set MOT_EN (bit 6)
-
-    // Clear any interrupt that fired during/after calibration so the INT pin
-    // starts LOW and does not immediately prevent sleep entry.
-    mpuReadReg(0x3A);         // reading INT_STATUS clears the latch
+    mpuWriteReg(0x37, 0x20);  // INT_PIN_CFG: active-high, latch until read
+    mpuWriteReg(0x1F, 0x14);  // MOT_THR: ~40 mg
+    mpuWriteReg(0x20, 0x01);  // MOT_DUR: 1 ms
+    mpuWriteReg(0x38, 0x40);  // INT_ENABLE: MOT_EN bit
+    mpuReadReg(0x3A);          // clear any latched interrupt immediately
     delay(5);
-
-    Serial.println("[Gyro] Motion-wake interrupt configured on GPIO 27");
+    Serial.println("[Gyro] Motion-wake interrupt configured");
 }
 
-// Call this after every wake from sleep (in PowerManager, after Wire.begin)
-// to clear any latched motion interrupt before re-entering sleep.
+// Clears the latched motion interrupt by reading INT_STATUS.
 void clearGyroMotionInterrupt() {
-    mpuReadReg(0x3A);  // clears latched INT_STATUS on MPU-6050
+    mpuReadReg(0x3A);
+}
+
+// Returns the raw INT_STATUS byte (register 0x3A).
+// Bit 6 (0x40) = motion interrupt fired.
+// Also clears the latch as a side effect — call once and act on the result.
+uint8_t readGyroIntStatus() {
+    return mpuReadReg(0x3A);
 }
 
 // ── Update loop (50 Hz) ───────────────────────────────────────────────
@@ -183,7 +169,6 @@ void updateGyro() {
         return;
     }
 
-    // Convert and debias
     float ax = ((raw.acc_x  / ACC_SENSITIVITY) * G_TO_MS2) - bias_ax;
     float ay = ((raw.acc_y  / ACC_SENSITIVITY) * G_TO_MS2) - bias_ay;
     float az = ((raw.acc_z  / ACC_SENSITIVITY) * G_TO_MS2) - bias_az;
@@ -191,22 +176,17 @@ void updateGyro() {
     float gy = (raw.gyro_y  / GYRO_SENSITIVITY) - bias_gy;
     float gz = (raw.gyro_z  / GYRO_SENSITIVITY) - bias_gz;
 
-    // Feed running-average buffers
     pushAvg(ax, ay, az, gx, gy, gz);
 
     float sax, say, saz, sgx, sgy, sgz;
     calcAvg(sax, say, saz, sgx, sgy, sgz);
 
-    // Activity detection for power manager
-    float mag = sqrtf(sax*sax + say*say + saz*saz);
-    if (mag > GYRO_ACTIVITY_THRESHOLD_MS2) {
+    // Activity detection via angular rate (immune to static tilt bias).
+    float gyroMag = sqrtf(sgx*sgx + sgy*sgy + sgz*sgz);
+    if (gyroMag > GYRO_ACTIVITY_THRESHOLD_DEGS) {
         gyroActivityFlag = true;
     }
 
-    // ── Tilt booleans — threshold debiased axes directly ────────────
-    // Calibration removes gravity from az, so atan2-based pitch/roll is
-    // invalid (denominator ≈ 0). Threshold sax/say directly instead:
-    // sax > g*sin(5°) is equivalent to ">5° forward tilt" when device is flat.
     bool tiltForward  = sax >  TILT_THRESHOLD_FB;
     bool tiltBackward = sax < -TILT_THRESHOLD_FB;
     bool tiltLeft     = say >  TILT_THRESHOLD_LR;

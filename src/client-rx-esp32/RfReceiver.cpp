@@ -12,7 +12,7 @@
 // 433MHz RX module:
 //   VCC  → 3.3V
 //   GND  → GND
-//   DATA → GPIO 13  (RF_RECEIVER_PIN in Settings.h)
+//   DATA → GPIO 35  (RF_RECEIVER_PIN in Settings.h)
 //
 // 2N2222A motor driver:
 //   GPIO 12 → 1kΩ → Base (B)
@@ -42,13 +42,15 @@ void initRfReceiver() {
     Serial.println("[RF] Receiver ready on GPIO 35.");
 }
 
-void updateRfReceiver() {
+// Returns true if a valid RF code was received this call.
+// The caller (main loop or sleep loop) can use this to trigger a wake or action.
+bool updateRfReceiver() {
+    bool validCodeReceived = false;
+
     if (mySwitch.available()) {
         unsigned long receivedCode = mySwitch.getReceivedValue();
 
-        if (receivedCode != 46726) {
-
-        } else {
+        if (receivedCode == 46726) {
             Serial.print("[RF] Received code: ");
             Serial.print(receivedCode);
             Serial.print(" / bitlength: ");
@@ -56,12 +58,13 @@ void updateRfReceiver() {
             Serial.print(" / protocol: ");
             Serial.println(mySwitch.getReceivedProtocol());
 
-            markControllerActivity();  // reset inactivity timer — RF counts as activity
+            markControllerActivity();  // reset inactivity timer
 
             digitalWrite(PIN_MOTOR, HIGH);
             digitalWrite(PIN_LED,   HIGH);
-            motorStartedAt = millis();
-            motorRunning   = true;
+            motorStartedAt     = millis();
+            motorRunning       = true;
+            validCodeReceived  = true;
         }
 
         mySwitch.resetAvailable();
@@ -72,4 +75,6 @@ void updateRfReceiver() {
         digitalWrite(PIN_LED,   LOW);
         motorRunning = false;
     }
+
+    return validCodeReceived;
 }

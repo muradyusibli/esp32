@@ -1,4 +1,4 @@
 #pragma once
 
 void initRfReceiver();
-void updateRfReceiver();
+bool updateRfReceiver();
