@@ -119,10 +119,6 @@ void enterLightSleepUntilButtonPress() {
         // ── Timer wake: poll RF and gyro, then go back to sleep ────────────
         if (cause == ESP_SLEEP_WAKEUP_TIMER) {
 
-            // Wire is not automatically restored after light sleep; re-init it
-            // here so the I²C calls below (gyro, etc.) actually work.
-            Wire.begin(OLED_SDA, OLED_SCL);
-
 #if RF_WAKES_FROM_SLEEP
             if (updateRfReceiver()) {
                 Serial.println("[Power] RF signal received — waking");
