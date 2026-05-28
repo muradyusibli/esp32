@@ -104,10 +104,6 @@ void enterLightSleepUntilButtonPress() {
     Serial.println("[Power] Gyro wake source armed on GPIO " TOSTRING(MPU_INT_PIN));
 #endif
 
-    // RF receiver: wake immediately when a signal pulse arrives so RCSwitch's ISR
-    // can capture the transitions.  GPIO 35 idles LOW; a received signal goes HIGH.
-    gpio_wakeup_enable((gpio_num_t)RF_RECEIVER_PIN, GPIO_INTR_HIGH_LEVEL);
-
     // Both sources registered once, outside the loop.
     esp_sleep_enable_gpio_wakeup();
     esp_sleep_enable_timer_wakeup(500000ULL);  // 500 ms — RF + gyro poll interval
@@ -216,7 +212,6 @@ void enterLightSleepUntilButtonPress() {
     for (int i = 0; i < numberOfWakeButtons; i++) {
         gpio_wakeup_disable((gpio_num_t)wakeButtonPins[i]);
     }
-    gpio_wakeup_disable((gpio_num_t)RF_RECEIVER_PIN);
 #ifdef MPU_INT_PIN
     gpio_wakeup_disable((gpio_num_t)MPU_INT_PIN);
 #endif
