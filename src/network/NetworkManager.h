@@ -3,10 +3,10 @@
 #include <Arduino.h>
 #include <WebSocketsClient.h>
 void startWiFiAttempt();
-void startWebSocketConnection();     // ← was startSocketConnection()
+void startWebSocketConnection();
 void updateWiFiAndSocket();
 
-void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);  // ← was socketIOEvent(...)
+void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length);
 void sendClientHello();
 void sendEspDone();
 void sendKeypressEvent(char key, const char* type = "keydown");

@@ -2,25 +2,9 @@
 
 #include <Arduino.h>
 #include <RCSwitch.h>
-#include "app/Settings.h"        // RF_RECEIVER_PIN
-#include "power/PowerManager.h"  // markControllerActivity()
+#include "app/Settings.h"
+#include "power/PowerManager.h"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Pin definitions
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// 433MHz RX module:
-//   VCC  → 3.3V
-//   GND  → GND
-//   DATA → GPIO 35  (RF_RECEIVER_PIN in Settings.h)
-//
-// 2N2222A motor driver:
-//   GPIO 12 → 1kΩ → Base (B)
-//   Emitter (E)    → GND
-//   Collector (C)  → Motor (–) wire
-//   Motor (+)      → ESP32 3.3V pin
-//   Flyback diode across motor (cathode to +, anode to –)
-// ─────────────────────────────────────────────────────────────────────────────
 
 #define PIN_MOTOR             12
 #define PIN_LED                2
@@ -42,8 +26,7 @@ void initRfReceiver() {
     Serial.println("[RF] Receiver ready on GPIO 35.");
 }
 
-// Returns true if a valid RF code was received this call.
-// The caller (main loop or sleep loop) can use this to trigger a wake or action.
+
 bool updateRfReceiver() {
     bool validCodeReceived = false;
 
@@ -77,4 +60,14 @@ bool updateRfReceiver() {
     }
 
     return validCodeReceived;
+}
+
+
+
+void enableRfReceive() {
+    mySwitch.enableReceive(RF_RECEIVER_PIN);
+}
+
+void disableRfReceive() {
+    mySwitch.disableReceive();
 }

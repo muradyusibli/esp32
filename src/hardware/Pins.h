@@ -13,7 +13,6 @@ extern const int ledButtonPins[];
 
 extern const int keypadRowPins[];
 extern const int keypadColPins[];
-// In Pins.h — add with your other pin constants
 constexpr int MPU_ADDR = 0x68;
 
 extern const int wakeButtonPins[];

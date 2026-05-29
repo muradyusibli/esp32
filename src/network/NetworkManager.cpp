@@ -13,9 +13,6 @@
 #include "led/LedController.h"
 #include "utils/Utils.h"
 
-// ─── Wire format helpers ──────────────────────────────────────────────────────
-// Every frame is plain JSON:  { "event": "<name>", "data": { ... } }
-// No Socket.IO array prefix. No EIO framing. No namespace packets.
 
 static void wsSend(const String& json) {
     printOutput(json);
@@ -31,7 +28,6 @@ static void sendEvent(const char* eventName, JsonObject data) {
     wsSend(out);
 }
 
-// ─── Button state flush ───────────────────────────────────────────────────────
 
 static void flushSocketButtonState() {
     if (!socketButtonStateDirty) return;
@@ -52,7 +48,7 @@ static void flushSocketButtonState() {
     socketButtonStateDirty = false;
 }
 
-// ─── Public send helpers ──────────────────────────────────────────────────────
+//  Public send
 
 void sendClientHello() {
     JsonDocument doc;
@@ -78,20 +74,8 @@ void sendEspDone() {
     requestDisplayMessage("Your turn!");
 }
 
-// ─── Keypress event ───────────────────────────────────────────────────────────
-//
-// Called by the LED task (core 1) whenever a key transitions from not-pressed
-// to pressed.  The actual webSocket.sendTXT() call is NOT safe to make from
-// core 1 — the WebSockets library is not thread-safe.  We therefore just set a
-// flag + store the key and let updateWiFiAndSocket() (main loop / core 0) flush
-// it, exactly the same pattern already used for espDonePending.
-//
-// Wire format:
-//   { "event": "game:keypress",
-//     "data":  { "roomId": "...", "key": "5", "numpadKey": 5 } }
-//
-// `key`      — the raw character from keypadScan() ('0'-'9', '*', '#', 'A'-'D')
-// `numpadKey`— integer 0-9 for digit keys, -1 for non-digit keys
+//  Keypress event
+
 
 void sendKeypressEvent(char key, const char* type) {
     if (!(socketStarted && socketConnected && socketReadyForEvents &&
@@ -112,7 +96,7 @@ void sendKeypressEvent(char key, const char* type) {
     payload["key"]  = keyStr;
     payload["type"] = type;
 
-    // Provide a convenient integer for digit keys (matches the useNumpad hook)
+
     if (key >= '0' && key <= '9') {
         payload["numpadKey"] = (int)(key - '0');
     } else {
@@ -148,7 +132,6 @@ void sendGyroData(float ax, float ay, float az,
     payload["gyro_y"] = serialized(String(gy, 2));
     payload["gyro_z"] = serialized(String(gz, 2));
 
-    // Tilt booleans
     payload["tilt_forward"]  = tiltForward;
     payload["tilt_backward"] = tiltBackward;
     payload["tilt_left"]     = tiltLeft;
@@ -157,8 +140,7 @@ void sendGyroData(float ax, float ay, float az,
     sendEvent("game:message", data);
 }
 
-// ─── Incoming message handler ─────────────────────────────────────────────────
-
+//  Incoming message handler
 static void handleGameMessage(JsonObject msg) {
     if (msg.isNull()) return;
 
@@ -190,7 +172,7 @@ static void handleGameMessage(JsonObject msg) {
     }
 }
 
-// ─── WebSocket event callback ─────────────────────────────────────────────────
+//  WebSocket event callback
 
 void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     String text = payloadToString(payload, length);
@@ -300,8 +282,7 @@ void onWebSocketEvent(WStype_t type, uint8_t* payload, size_t length) {
     }
 }
 
-// ─── WiFi + connection lifecycle ──────────────────────────────────────────────
-
+//WiFi + connection lifecycle
 void startWiFiAttempt() {
     Serial.printf("[WiFi] Connecting to: %s\n", ssid);
     displayMessage("Connecting WiFi");
@@ -323,7 +304,6 @@ void startWebSocketConnection() {
     webSocket.onEvent(onWebSocketEvent);
     webSocket.setReconnectInterval(SOCKET_RECONNECT_INTERVAL_MS);
 
-    // Temporarily disable heartbeat while debugging the handshake
     webSocket.enableHeartbeat(100000, 10000, 3);  // ping every 100s
 
 #if USE_SOCKET_SSL
@@ -375,7 +355,6 @@ void updateWiFiAndSocket() {
         return;
     }
 
-    // WiFi lost
     if (wifiWasConnected) {
         wifiWasConnected     = false;
         socketStarted        = false;

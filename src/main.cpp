@@ -15,9 +15,8 @@ void setup() {
     Serial.println("\n=== ESP32 Sequence Game ===");
 
     initControllerPins();
-    initDisplay();          // Wire.begin() lives here — runs first
-    initGyro();
-    initGyroMotionWake();// ← add after initDisplay, shares the same Wire bus
+    initDisplay();
+    initGyroMotionWake();
     initRfReceiver();
     initKeypad();
 
@@ -42,6 +41,6 @@ void loop() {
     updateWiFiAndSocket();
     updateLowPowerManager();
     updateRfReceiver();
-    updateGyro();           // ← add
+    updateGyro();
     yield();
 }

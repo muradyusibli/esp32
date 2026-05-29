@@ -10,11 +10,11 @@
 #include "power/PowerManager.h"
 #include "utils/Utils.h"
 #include "input/Keypad.h"
-#include "network/NetworkManager.h"  // ← for sendKeypressEvent()
-static DebouncedInput randomButtonDebounce;
-static DebouncedInput socketButtonDebounce;
+#include "network/NetworkManager.h"
 
-// Animation state only touched by ledButtonTask.
+static DebouncedInput randomButtonDebounce;
+static DebouncedInput sleepButtonDebounce;
+
 static bool randomLedIsOn = false;
 static int randomBlinkPosition = 0;
 static int randomCurrentLed = -1;
@@ -33,10 +33,7 @@ void initControllerPins() {
         digitalWrite(ledPins[i], LOW);
     }
 
-
-
-    pinMode(RANDOM_BUTTON_PIN, INPUT_PULLUP);
-    pinMode(SOCKET_BUTTON_PIN, INPUT_PULLUP);
+    pinMode(SLEEP_BUTTON_PIN, INPUT_PULLUP);
 
     randomSeed(analogRead(34));
 }
@@ -80,7 +77,6 @@ void stopLedTaskAnimations(bool turnOffLeds) {
     backendLedIsOn = false;
     backendSequencePosition = 0;
 
-    // Reset keypad rows to idle state before suspend
     for (int r = 0; r < 4; r++) {
         digitalWrite(keypadRowPins[r], HIGH);
     }
@@ -163,8 +159,6 @@ static void updateBackendSequenceFromLedTask() {
             turnAllLedsOff();
             Serial.println("[IOc] sequence done — setting espDonePending");
 
-            // Signal main loop to call sendEspDone().
-            // Do not call socketIO from this task.
             portENTER_CRITICAL(&sharedMux);
             espDonePending = true;
             portEXIT_CRITICAL(&sharedMux);
@@ -182,7 +176,7 @@ static void updateBackendSequenceFromLedTask() {
         turnAllLedsOff();
         backendLedIsOn = false;
         backendSequencePosition++;
-        backendNextChangeAt = now + 80; // gap between LEDs
+        backendNextChangeAt = now + 80;
     }
 }
 
@@ -192,24 +186,23 @@ void ledButtonTask(void* parameter) {
 
     while (true) {
 
-       char key = keypadScan();
+        char key = keypadScan();
         bool anyManual = (key >= 'A' && key <= 'D');
 
         if (anyManual) markControllerActivity();
 
-        // ── Send keypress to backend on key-down edge only ─────────────────
-        // `previousKey` tracks the last scan result so we fire exactly once
-        // per press, not once per scan tick (~5 ms).
+
         static char previousKey = 0;
         if (key != 0 && key != previousKey) {
             sendKeypressEvent(key, "keydown");
         }
-        // Send keyup when a digit key is released (A-D don't need keyup)
+
+
         if (key == 0 && previousKey >= '0' && previousKey <= '9') {
             sendKeypressEvent(previousKey, "keyup");
         }
+
         previousKey = key;
-        // ──────────────────────────────────────────────────────────────────
 
         if (anyManual) {
             if (!previousManual) {
@@ -235,24 +228,15 @@ void ledButtonTask(void* parameter) {
             previousManual = false;
         }
 
-        // Random button
-        bool newRandomState = false;
-        if (updateDebouncedInput(RANDOM_BUTTON_PIN, randomButtonDebounce, newRandomState)) {
-            if (newRandomState) {
-                markControllerActivity();
-                if (!manualControlActive && !randomSequenceActive) {
-                    startRandomSequenceFromLedTask();
-                } else {
-                    Serial.println("[BTN] Random ignored");
-                }
-            }
-        }
 
-        // Socket button
-        bool newSocketState = false;
-        if (updateDebouncedInput(SOCKET_BUTTON_PIN, socketButtonDebounce, newSocketState)) {
-            markControllerActivity();
-            requestSocketButtonChange(newSocketState);
+        bool newSleepState = false;
+        if (updateDebouncedInput(SLEEP_BUTTON_PIN, sleepButtonDebounce, newSleepState)) {
+            if (newSleepState) {
+                markControllerActivity();
+                Serial.println("[BTN] Sleep requested");
+                requestDisplayMessage("Sleep requested");
+                requestImmediateSleep();
+            }
         }
 
         if (manualControlActive) {
@@ -260,7 +244,6 @@ void ledButtonTask(void* parameter) {
             continue;
         }
 
-        // Backend sequence request
         int requestedSequence[MAX_BACKEND_SEQUENCE_STEPS];
         int requestedLength = 0;
         int requestedDelay = blinkDelay;
@@ -269,7 +252,6 @@ void ledButtonTask(void* parameter) {
             startBackendSequenceFromLedTask(requestedSequence, requestedLength, requestedDelay);
         }
 
-        // Animate
         if (randomSequenceActive) {
             updateRandomSequenceFromLedTask();
         } else if (backendSequenceActive) {

@@ -1,7 +1,7 @@
 #include "app/State.h"
 #include "hardware/Pins.h"
 
-WebSocketsClient webSocket;          // ← was SocketIOclient socketIO
+WebSocketsClient webSocket;
 HTTPClient http;
 
 bool socketStarted        = false;
@@ -26,7 +26,7 @@ volatile bool manualControlActive = false;
 
 volatile bool socketButtonChangeRequest = false;
 volatile bool pendingSocketButtonState  = false;
-
+volatile bool sleepButtonRequest = false;
 volatile bool backendLoadRequest = false;
 int pendingBackendSequence[MAX_BACKEND_SEQUENCE_STEPS];
 int pendingBackendSequenceLength  = 0;

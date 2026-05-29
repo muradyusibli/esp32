@@ -16,5 +16,6 @@ void     initGyro();
 void     updateGyro();
 bool     isGyroActive();
 void     initGyroMotionWake();
+void     rearmGyroMotionInterrupt();
 void     clearGyroMotionInterrupt();
 uint8_t  readGyroIntStatus();

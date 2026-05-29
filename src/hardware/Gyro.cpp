@@ -15,11 +15,11 @@ static constexpr int   AVG_WINDOW       =    20;
 static constexpr float TILT_THRESHOLD_FB  =  0.854f;  // forward/backward (5°)
 static constexpr float TILT_THRESHOLD_LR  =  1.703f;  // left/right (10°)
 
-// ── Bias (calibration) ──────────────────────────────────────────────
+//  Bias (calibration)
 static float bias_ax = 0, bias_ay = 0, bias_az = 0;
 static float bias_gx = 0, bias_gy = 0, bias_gz = 0;
 
-// ── Running-average buffers ──────────────────────────────────────────
+//  Running-average buffers
 static float buf_ax[AVG_WINDOW] = {}, buf_ay[AVG_WINDOW] = {}, buf_az[AVG_WINDOW] = {};
 static float buf_gx[AVG_WINDOW] = {}, buf_gy[AVG_WINDOW] = {}, buf_gz[AVG_WINDOW] = {};
 static int   avg_idx   = 0;
@@ -51,7 +51,7 @@ static bool prev_tiltRight    = false;
 
 static volatile bool gyroActivityFlag = false;
 
-// ── Gyro class ───────────────────────────────────────────────────────
+//  Gyro class
 bool Gyro::begin() {
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(0x6B);
@@ -77,7 +77,7 @@ bool Gyro::read(GyroData& out) {
     return true;
 }
 
-// ── Calibration ──────────────────────────────────────────────────────
+// Calibration
 static void calibrateGyro() {
     Serial.println("[Gyro] Calibrating — keep still...");
 
@@ -115,7 +115,7 @@ void initGyro() {
     }
 }
 
-// ── MPU-6050 register helpers ─────────────────────────────────────────
+// MPU-6050 register helpers
 static void mpuWriteReg(uint8_t reg, uint8_t value) {
     Wire.beginTransmission(MPU_ADDR);
     Wire.write(reg);
@@ -131,31 +131,48 @@ static uint8_t mpuReadReg(uint8_t reg) {
     return Wire.available() ? Wire.read() : 0;
 }
 
-// ── Motion-wake interrupt setup ───────────────────────────────────────
-// Safe to call both at boot and after light-sleep wake (re-arms the MPU registers).
+// Motion-wake interrupt setup
 void initGyroMotionWake() {
-    mpuWriteReg(0x37, 0x20);  // INT_PIN_CFG: active-high, latch until read
-    mpuWriteReg(0x1F, 0x14);  // MOT_THR: ~40 mg
-    mpuWriteReg(0x20, 0x01);  // MOT_DUR: 1 ms
-    mpuWriteReg(0x38, 0x40);  // INT_ENABLE: MOT_EN bit
-    mpuReadReg(0x3A);          // clear any latched interrupt immediately
-    delay(5);
-    Serial.println("[Gyro] Motion-wake interrupt configured");
+    // MPU-9265 Wake-on-Motion setup
+    mpuWriteReg(0x6B, 0x00);   // PWR_MGMT_1: wake up, disable sleep
+    delay(10);
+    mpuWriteReg(0x6C, 0x00);   // PWR_MGMT_2: enable accel + gyro
+    delay(10);
+
+    mpuWriteReg(0x1C, 0x00);   // ACCEL_CONFIG: ±2g
+    mpuWriteReg(0x1D, 0x01);   // ACCEL_CONFIG2: DLPF enabled, 184Hz BW
+
+    mpuWriteReg(0x1F, 0x28);   // WOM_THR
+
+    mpuWriteReg(0x69, 0xC0);   // ACCEL_INTEL_CTRL: enable WOM, use previous sample
+
+    mpuWriteReg(0x38, 0x40);   // INT_ENABLE: WOM_EN
+
+    mpuWriteReg(0x37, 0x00);
+
+    mpuReadReg(0x3A);
+    delay(10);
+
+    Serial.printf("[Gyro] WOM registers: WOM_THR=0x%02X INTEL_CTRL=0x%02X INT_EN=0x%02X\n",
+        mpuReadReg(0x1F), mpuReadReg(0x69), mpuReadReg(0x38));
+    Serial.println("[Gyro] Motion-wake interrupt configured (MPU-9265 WOM)");
 }
 
-// Clears the latched motion interrupt by reading INT_STATUS.
+void rearmGyroMotionInterrupt() {
+    mpuWriteReg(0x38, 0x40);
+}
+
+
 void clearGyroMotionInterrupt() {
     mpuReadReg(0x3A);
 }
 
-// Returns the raw INT_STATUS byte (register 0x3A).
-// Bit 6 (0x40) = motion interrupt fired.
-// Also clears the latch as a side effect — call once and act on the result.
+
 uint8_t readGyroIntStatus() {
     return mpuReadReg(0x3A);
 }
 
-// ── Update loop (50 Hz) ───────────────────────────────────────────────
+//  Update loop (50 Hz)
 static unsigned long lastGyroSendAt = 0;
 
 void updateGyro() {
@@ -181,7 +198,6 @@ void updateGyro() {
     float sax, say, saz, sgx, sgy, sgz;
     calcAvg(sax, say, saz, sgx, sgy, sgz);
 
-    // Activity detection via angular rate (immune to static tilt bias).
     float gyroMag = sqrtf(sgx*sgx + sgy*sgy + sgz*sgz);
     if (gyroMag > GYRO_ACTIVITY_THRESHOLD_DEGS) {
         gyroActivityFlag = true;

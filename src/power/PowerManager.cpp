@@ -16,17 +16,11 @@
 #include "network/NetworkManager.h"
 #include "client-rx-esp32/RfReceiver.h"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Optional: MPU-6050 hardware INT wire
-//
-// Uncomment ONLY after physically wiring MPU-6050 INT pin → GPIO 27.
-// Without the wire the pin floats HIGH, registers as a permanent wake source,
-// and prevents sleep entry entirely.
-//
-// When commented out, gyro motion is detected via I²C polling instead
-// (readGyroIntStatus() every 500 ms timer wake) — no extra wire needed.
-// ─────────────────────────────────────────────────────────────────────────────
-// #define MPU_INT_PIN 27
+
+#define MPU_INT_PIN 27
+
+
+#define RF_LISTEN_WINDOW_MS 100
 
 void markControllerActivity() {
     lastControllerActivityAt = millis();
@@ -47,28 +41,62 @@ bool isControllerBusy() {
            socketButtonStateDirty;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Sleep entry
-// ─────────────────────────────────────────────────────────────────────────────
+void requestImmediateSleep() {
+    portENTER_CRITICAL(&sharedMux);
+    sleepButtonRequest = true;
+    portEXIT_CRITICAL(&sharedMux);
+}
+
+static bool takeImmediateSleepRequest() {
+    bool requested = false;
+
+    portENTER_CRITICAL(&sharedMux);
+    if (sleepButtonRequest) {
+        sleepButtonRequest = false;
+        requested = true;
+    }
+    portEXIT_CRITICAL(&sharedMux);
+
+    return requested;
+}
+
+static void clearImmediateSleepRequest() {
+    portENTER_CRITICAL(&sharedMux);
+    sleepButtonRequest = false;
+    portEXIT_CRITICAL(&sharedMux);
+}
+
+static void waitForSleepButtonRelease(const char* reason) {
+    if (digitalRead(SLEEP_BUTTON_PIN) == LOW) {
+        Serial.println(reason);
+        displayMessage("Release sleep\nbutton");
+
+        while (digitalRead(SLEEP_BUTTON_PIN) == LOW) {
+            delay(10);
+            yield();
+        }
+
+        delay(BUTTON_DEBOUNCE_MS);
+    }
+
+    clearImmediateSleepRequest();
+}
+
+
 
 void enterLightSleepUntilButtonPress() {
-    Serial.println("[Power] Entering light sleep (3 min inactive)");
+    Serial.println("[Power] Entering light sleep");
     displayMessage("Sleeping\nPress button");
     delay(150);
 
-    // Suspend the LED task — it holds mutexes we don't want locked during sleep.
     if (ledButtonTaskHandle) vTaskSuspend(ledButtonTaskHandle);
     stopLedTaskAnimations(true);
 
-    // Reset network state — we reconnect fresh on wake.
     socketStarted        = false;
     socketConnected      = false;
     socketReadyForEvents = false;
     wifiWasConnected     = false;
 
-    // Clear the dirty flag so it doesn't permanently block sleep on reconnect.
-    // (flushSocketButtonState() only clears it when the socket is connected;
-    //  if the button was pressed offline the flag stays set forever.)
     socketButtonStateDirty = false;
 
     WiFi.disconnect(true);
@@ -77,38 +105,49 @@ void enterLightSleepUntilButtonPress() {
 
     clearDisplay(true);
 
-    // Drive all row pins LOW so any keypress pulls a column pin LOW during sleep.
     for (int r = 0; r < 4; r++) {
         pinMode(keypadRowPins[r], OUTPUT);
         digitalWrite(keypadRowPins[r], LOW);
     }
 
-    // Log pin states for debugging before we go silent.
+    waitForSleepButtonRelease("[Power] Waiting for sleep button release before sleeping");
+
+
+#if RF_WAKES_FROM_SLEEP
+    disableRfReceive();
+#endif
+
     for (int i = 0; i < numberOfWakeButtons; i++) {
         Serial.printf("[Power] Wake pin GPIO%d = %d\n",
                       wakeButtonPins[i], digitalRead(wakeButtonPins[i]));
     }
     Serial.flush();
 
-    // ── Register wake sources ──────────────────────────────────────────────
-    // Keypad column pins: wake when any column is pulled LOW by a keypress.
+
     for (int i = 0; i < numberOfWakeButtons; i++) {
         gpio_wakeup_enable((gpio_num_t)wakeButtonPins[i], GPIO_INTR_LOW_LEVEL);
     }
 
+    // MPU-9265 INT pin: wake when pulled HIGH by motion.
 #ifdef MPU_INT_PIN
-    // Hardware INT wire path: arm the GPIO.
-    // Only reachable when the wire is physically present.
+    initGyroMotionWake();
+    delay(20);
     clearGyroMotionInterrupt();
+    delay(5);
     gpio_wakeup_enable((gpio_num_t)MPU_INT_PIN, GPIO_INTR_HIGH_LEVEL);
-    Serial.println("[Power] Gyro wake source armed on GPIO " TOSTRING(MPU_INT_PIN));
+    Serial.printf("[Power] Gyro wake source armed on GPIO %d\n", MPU_INT_PIN);
 #endif
 
-    // Both sources registered once, outside the loop.
-    esp_sleep_enable_gpio_wakeup();
-    esp_sleep_enable_timer_wakeup(500000ULL);  // 500 ms — RF + gyro poll interval
+    // RF is NOT registered as a GPIO wake source — the 433MHz module DATA
 
-    // ── Sleep loop ─────────────────────────────────────────────────────────
+    Serial.println("[Power] RF wake via timer poll (500ms)");
+    Serial.flush();
+
+    // GPIO and timer wake sources.
+    esp_sleep_enable_gpio_wakeup();
+    esp_sleep_enable_timer_wakeup(500000ULL);  // 500 ms — RF poll interval
+
+    //  Sleep loop
     bool wakeConfirmed = false;
 
     while (!wakeConfirmed) {
@@ -116,56 +155,49 @@ void enterLightSleepUntilButtonPress() {
 
         esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
 
-        // ── Timer wake: poll RF and gyro, then go back to sleep ────────────
         if (cause == ESP_SLEEP_WAKEUP_TIMER) {
-
 #if RF_WAKES_FROM_SLEEP
-            if (updateRfReceiver()) {
-                Serial.println("[Power] RF signal received — waking");
+            enableRfReceive();
+
+            delay(RF_LISTEN_WINDOW_MS);
+
+            bool rfGot = updateRfReceiver();
+
+            if (rfGot) {
+                Serial.println("[Power] RF signal received (timer poll) — waking");
                 Serial.flush();
                 wakeConfirmed = true;
                 break;
             }
-#else
-            updateRfReceiver();  // still fires motor/LED, just doesn't wake
-#endif
 
-#if GYRO_WAKES_FROM_SLEEP && !defined(MPU_INT_PIN)
-            // I²C polling path — no hardware INT wire required.
-            // Bit 6 of INT_STATUS (0x3A) = motion interrupt fired.
-            uint8_t intStatus = readGyroIntStatus();
-            if (intStatus & 0x40) {
-                Serial.println("[Power] Gyro motion detected (I2C poll) — waking");
-                Serial.flush();
-                wakeConfirmed = true;
-                break;
-            }
+            disableRfReceive();
 #endif
-
-            continue;  // no wake condition — go back to sleep
+            continue;
         }
 
-        // ── GPIO wake: keypad, RF signal, or (optionally) hardware gyro INT ──
         if (cause == ESP_SLEEP_WAKEUP_GPIO) {
 
-            // Check keypad first — any column pulled LOW means a key is pressed.
-            bool keypadPressed = false;
+            bool gpioButtonPressed = false;
             for (int i = 0; i < numberOfWakeButtons; i++) {
                 if (digitalRead(wakeButtonPins[i]) == LOW) {
-                    keypadPressed = true;
+                    gpioButtonPressed = true;
                     break;
                 }
             }
 
-            if (keypadPressed) {
-                Serial.println("[Power] GPIO wake — keypad pressed");
+            if (gpioButtonPressed) {
+                if (digitalRead(SLEEP_BUTTON_PIN) == LOW) {
+                    Serial.println("[Power] GPIO wake — sleep button pressed");
+                } else {
+                    Serial.println("[Power] GPIO wake — keypad pressed");
+                }
                 Serial.flush();
                 wakeConfirmed = true;
                 break;
             }
 
 #ifdef MPU_INT_PIN
-            // Hardware gyro INT wire path.
+            if (digitalRead(MPU_INT_PIN) == HIGH) {
 #if GYRO_WAKES_FROM_SLEEP
                 Serial.println("[Power] Gyro motion wake (INT pin) — waking");
                 Serial.flush();
@@ -176,41 +208,31 @@ void enterLightSleepUntilButtonPress() {
                 Serial.println("[Power] Gyro INT fired but GYRO_WAKES_FROM_SLEEP=0 — continuing");
                 Serial.flush();
                 clearGyroMotionInterrupt();
+                delay(5);
+
+                gpio_wakeup_enable((gpio_num_t)MPU_INT_PIN, GPIO_INTR_HIGH_LEVEL);
                 continue;
 #endif
-#endif  // MPU_INT_PIN
-
-            // Not keypad (and no INT wire) — likely the RF pin went HIGH.
-            // RCSwitch's ISR ran while the CPU was awake during the signal;
-            // check whether a valid code was decoded.
-#if RF_WAKES_FROM_SLEEP
-            if (updateRfReceiver()) {
-                Serial.println("[Power] RF signal via GPIO wake — waking");
-                Serial.flush();
-                wakeConfirmed = true;
-                break;
             }
-#else
-            updateRfReceiver();
 #endif
 
-            continue;  // spurious / noise wake — go back to sleep
+            continue;
         }
 
-        // ── Unexpected cause: bail out rather than hang ────────────────────
         Serial.printf("[Power] Unexpected wake cause: %d — waking\n", cause);
         Serial.flush();
         wakeConfirmed = true;
         break;
     }
 
-    // ── Teardown wake sources ──────────────────────────────────────────────
     for (int i = 0; i < numberOfWakeButtons; i++) {
         gpio_wakeup_disable((gpio_num_t)wakeButtonPins[i]);
     }
+
 #ifdef MPU_INT_PIN
     gpio_wakeup_disable((gpio_num_t)MPU_INT_PIN);
 #endif
+
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
 
     // Restore keypad row pins to their normal driven-HIGH idle state.
@@ -220,15 +242,22 @@ void enterLightSleepUntilButtonPress() {
 
     lastControllerActivityAt = millis();
 
-    // ── Re-initialise I²C ─────────────────────────────────────────────────
-    // The Wire peripheral is not automatically restored after light sleep.
+    //  Re-initialise I²C
+    // Wire is not automatically restored after light sleep.
     Wire.end();
     delay(10);
     Wire.begin(OLED_SDA, OLED_SCL);
+    delay(20);  // let bus settle before talking to MPU
 
-    // Re-arm the MPU-6050 motion interrupt registers.
-    // They may have been cleared or lost during the Wire re-init sequence.
+    // Re-arm WOM registers after Wire re-init.
     initGyroMotionWake();
+
+    // Re-enable RF receiver for normal awake operation.
+#if RF_WAKES_FROM_SLEEP
+    enableRfReceive();
+#endif
+
+    waitForSleepButtonRelease("[Power] Waiting for sleep button release after wake");
 
     if (ledButtonTaskHandle) vTaskResume(ledButtonTaskHandle);
 
@@ -237,12 +266,16 @@ void enterLightSleepUntilButtonPress() {
     startWiFiAttempt();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Called every loop() iteration
-// ─────────────────────────────────────────────────────────────────────────────
 
 void updateLowPowerManager() {
 #if ENABLE_LOW_POWER_MODE
+
+    if (takeImmediateSleepRequest()) {
+        Serial.println("[Power] Sleep button pressed — entering light sleep");
+        enterLightSleepUntilButtonPress();
+        return;
+    }
+
     if (!lastControllerActivityAt) {
         markControllerActivity();
         return;
@@ -250,9 +283,11 @@ void updateLowPowerManager() {
 
     static unsigned long lastDebugPrint = 0;
     unsigned long now = millis();
+
     if (now - lastDebugPrint >= 5000) {
         lastDebugPrint = now;
         unsigned long idleMs = now - lastControllerActivityAt;
+
         Serial.printf("[Power] Idle: %lums / %lums  buttons:%d  busy:%d"
                       " (manual:%d randSeq:%d backSeq:%d backLoad:%d sockDirty:%d)"
                       "  gyro:%d\n",
@@ -265,6 +300,7 @@ void updateLowPowerManager() {
                       (int)backendLoadRequest,
                       (int)socketButtonStateDirty,
                       (int)isGyroActive());
+
         Serial.flush();
     }
 
@@ -281,5 +317,6 @@ void updateLowPowerManager() {
     if (millis() - lastControllerActivityAt >= INACTIVITY_SLEEP_MS) {
         enterLightSleepUntilButtonPress();
     }
+
 #endif
 }
